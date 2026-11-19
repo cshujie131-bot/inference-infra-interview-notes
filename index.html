@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8fc">
+  <meta name="description" content="按公司、面试场次和技术主题整理的个人推理 Infra 面试题库。">
+  <title>推理 Infra 面经</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./rounds.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#library">跳到题库</a>
+  <div class="workspace">
+    <aside class="sidebar">
+      <a class="brand" href="./" aria-label="推理 Infra 面经首页">
+        <span class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span class="brand-copy"><strong>推理 Infra</strong><small>个人面试题库</small></span>
+      </a>
+
+      <nav class="sidebar-nav" aria-label="按公司浏览题库">
+        <button class="nav-item all-rounds" type="button" id="all-companies" aria-pressed="true">
+          <span class="icon icon-grid" aria-hidden="true"></span>
+          <span>全部面经</span>
+          <span class="nav-count" id="nav-total"></span>
+        </button>
+        <div class="company-nav">
+          <h2>公司</h2>
+          <div id="company-list"></div>
+        </div>
+      </nav>
+
+    </aside>
+
+    <div class="content">
+      <header class="topbar">
+        <span class="workspace-label"><span class="icon icon-panel" aria-hidden="true"></span>公开题库</span>
+        <form class="search" role="search" id="search-form">
+          <span class="icon icon-search" aria-hidden="true"></span>
+          <input type="search" id="search" aria-label="搜索公司、题目或标签" placeholder="搜索公司、题目或标签" autocomplete="off">
+          <kbd id="search-shortcut" aria-hidden="true">⌘ K</kbd>
+        </form>
+      </header>
+
+      <main class="main" id="library">
+        <section class="hero" aria-labelledby="title">
+          <canvas class="hero-art" id="hero-art" aria-hidden="true"></canvas>
+          <div class="hero-content">
+            <h1 id="title">推理 Infra 面经</h1>
+            <p>按公司沉淀面试题，按技术主题复习。</p>
+            <dl class="stats" id="stats"></dl>
+          </div>
+        </section>
+
+        <section class="catalogue" aria-labelledby="catalogue-title">
+          <div class="catalogue-heading">
+            <h2 id="catalogue-title">全部面经</h2>
+            <span class="result-count" id="result-count" role="status" aria-live="polite"></span>
+          </div>
+          <div class="filters">
+            <span class="filter-label"><span class="icon icon-filter" aria-hidden="true"></span>技术标签</span>
+            <div class="filter-list" id="filter-list" role="group" aria-label="技术标签"></div>
+          </div>
+          <div class="round-list" id="round-list"></div>
+          <div class="empty" id="empty" hidden>
+            <span class="icon icon-search" aria-hidden="true"></span>
+            <h3 id="empty-title">没有匹配的面经</h3>
+            <p id="empty-message">试试其他关键词，或清除筛选条件。</p>
+            <button class="reset" id="reset" type="button">清除筛选</button>
+          </div>
+          <noscript><p class="empty">请启用 JavaScript 浏览题库。</p></noscript>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>
