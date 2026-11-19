@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f7f8fc">
-  <meta name="description" content="按公司、面试场次和技术主题整理的个人推理 Infra 面试题库。">
+  <meta name="description" content="按公司和面试场次整理的推理 Infra 面试题库。">
   <title>推理 Infra 面经</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./styles.css">
@@ -25,7 +25,7 @@
       <nav class="sidebar-nav" aria-label="按公司浏览题库">
         <button class="nav-item all-rounds" type="button" id="all-companies" aria-pressed="true">
           <span class="icon icon-grid" aria-hidden="true"></span>
-          <span>全部面经</span>
+          <span>全部公司</span>
           <span class="nav-count" id="nav-total"></span>
         </button>
         <div class="company-nav">
@@ -41,7 +41,7 @@
         <span class="workspace-label"><span class="icon icon-panel" aria-hidden="true"></span>公开题库</span>
         <form class="search" role="search" id="search-form">
           <span class="icon icon-search" aria-hidden="true"></span>
-          <input type="search" id="search" aria-label="搜索公司、题目或标签" placeholder="搜索公司、题目或标签" autocomplete="off">
+          <input type="search" id="search" aria-label="搜索公司或题目" placeholder="搜索公司或题目" autocomplete="off">
           <kbd id="search-shortcut" aria-hidden="true">⌘ K</kbd>
         </form>
       </header>
@@ -51,26 +51,22 @@
           <canvas class="hero-art" id="hero-art" aria-hidden="true"></canvas>
           <div class="hero-content">
             <h1 id="title">推理 Infra 面经</h1>
-            <p>按公司沉淀面试题，按技术主题复习。</p>
+            <p>按公司和面试场次整理的面试题与简答。</p>
             <dl class="stats" id="stats"></dl>
           </div>
         </section>
 
         <section class="catalogue" aria-labelledby="catalogue-title">
           <div class="catalogue-heading">
-            <h2 id="catalogue-title">全部面经</h2>
+            <h2 id="catalogue-title">全部公司</h2>
             <span class="result-count" id="result-count" role="status" aria-live="polite"></span>
           </div>
-          <div class="filters">
-            <span class="filter-label"><span class="icon icon-filter" aria-hidden="true"></span>技术标签</span>
-            <div class="filter-list" id="filter-list" role="group" aria-label="技术标签"></div>
-          </div>
-          <div class="round-list" id="round-list"></div>
+          <div class="company-groups" id="company-groups"></div>
           <div class="empty" id="empty" hidden>
             <span class="icon icon-search" aria-hidden="true"></span>
             <h3 id="empty-title">没有匹配的面经</h3>
-            <p id="empty-message">试试其他关键词，或清除筛选条件。</p>
-            <button class="reset" id="reset" type="button">清除筛选</button>
+            <p id="empty-message">试试其他关键词，或返回全部公司。</p>
+            <button class="reset" id="reset" type="button">重置搜索</button>
           </div>
           <noscript><p class="empty">请启用 JavaScript 浏览题库。</p></noscript>
         </section>

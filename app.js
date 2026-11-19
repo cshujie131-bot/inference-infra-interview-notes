@@ -3,16 +3,13 @@
 const search = document.getElementById('search');
 const companyList = document.getElementById('company-list');
 const allCompanies = document.getElementById('all-companies');
-const filterList = document.getElementById('filter-list');
-const roundList = document.getElementById('round-list');
+const companyGroups = document.getElementById('company-groups');
 const catalogueTitle = document.getElementById('catalogue-title');
 const resultCount = document.getElementById('result-count');
 const empty = document.getElementById('empty');
 const reset = document.getElementById('reset');
 
-const tagSet = new Set();
 const companies = new Map();
-const selectedTags = new Set();
 let selectedCompany = '';
 let questionTotal = 0;
 
@@ -33,28 +30,67 @@ function normalize(text) {
   return text.normalize('NFKC').toLowerCase();
 }
 
+function makeReferences(sources) {
+  const references = element('div', 'references');
+  for (const { label, url } of sources) {
+    const link = element('a', '', label);
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    references.append(link);
+  }
+  return references;
+}
+
+function makeQuestionDetails(note) {
+  const details = element('details', 'question-details');
+  details.append(element('summary', '', '相关细节'));
+  const content = element('div', 'question-detail-content');
+  if (note.table) {
+    const table = element('table', 'example-table');
+    table.append(element('caption', '', note.table.caption));
+    const header = table.createTHead().insertRow();
+    for (const title of note.table.columns) {
+      const cell = element('th', '', title);
+      cell.scope = 'col';
+      header.append(cell);
+    }
+    const body = table.createTBody();
+    for (const [label, ...values] of note.table.rows) {
+      const row = body.insertRow();
+      const heading = element('th', '', label);
+      heading.scope = 'row';
+      row.append(heading);
+      for (const value of values) row.append(element('td', '', value));
+    }
+    content.append(table);
+  }
+  if (note.tree) content.append(element('pre', 'tree-example', note.tree));
+  for (const paragraph of note.text.split('\n\n')) {
+    content.append(element('p', '', paragraph));
+  }
+  details.append(content);
+  return details;
+}
+
 function makeRound(round) {
   const card = element('details', 'round');
   card.id = round.id;
-  let glyph = 'note';
-  if (round.tags.includes('投机解码')) {
-    glyph = 'flash';
-  } else if (round.tags.includes('并行')) {
-    glyph = 'stack';
-    card.dataset.tone = 'parallel';
-  } else if (round.tags.includes('算子')) {
-    glyph = 'chip';
-    card.dataset.tone = 'kernel';
-  } else if (round.tags.includes('请求调度')) {
-    glyph = 'bars';
-    card.dataset.tone = 'schedule';
-  }
   const summary = element('summary');
   const tile = element('span', 'round-tile');
-  tile.append(icon(glyph));
+  tile.append(icon('note'));
   const copy = element('span', 'round-copy');
+  const titleLine = element('span', 'round-title-line');
+  titleLine.append(element('span', 'round-title', round.title));
+  const keywords = round.keywords ?? round.tags ?? [];
+  if (keywords.length) {
+    const badges = element('span', 'round-keywords');
+    for (const keyword of keywords) badges.append(element('span', 'round-keyword', keyword));
+    titleLine.append(badges);
+  }
+  copy.append(titleLine);
+
   const meta = element('span', 'round-meta');
-  meta.append(element('span', '', round.company));
   if (round.round && round.round !== round.title) meta.append(element('span', '', round.round));
   if (round.date) {
     const date = element('time', '', round.date);
@@ -63,67 +99,49 @@ function makeRound(round) {
     datePart.append(date);
     meta.append(datePart);
   }
-  copy.append(element('span', 'round-title', round.title), meta);
+  if (meta.childElementCount) copy.append(meta);
 
-  const tags = element('span', 'round-tags');
-  for (const tag of round.tags) tags.append(element('span', 'round-tag', tag));
   const side = element('span', 'round-side');
   const chevron = element('span', 'chevron');
   chevron.setAttribute('aria-hidden', 'true');
   side.append(element('span', 'question-count', round.questions.length + ' 题'), chevron);
-  summary.append(tile, copy, tags, side);
+  summary.append(tile, copy, side);
 
   const body = element('div', 'round-body');
   const list = element('ol', 'questions');
-  for (const { question, answer } of round.questions) {
+  for (const { question, answer, note, sources } of round.questions) {
     const item = element('li');
-    item.append(element('h3', '', question), element('p', '', answer));
+    item.append(element('h4', '', question), element('p', '', answer));
+    if (note) item.append(makeQuestionDetails(note));
+    if (sources?.length) item.append(makeReferences(sources));
     list.append(item);
   }
   body.append(list);
-  if (round.sources?.length) {
-    const references = element('div', 'references');
-    references.append(element('span', '', '参考资料'));
-    for (const { label, url } of round.sources) {
-      const link = element('a', '', label);
-      link.href = url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      references.append(link);
-    }
-    body.append(references);
-  }
+  if (round.sources?.length) body.append(makeReferences(round.sources));
   card.append(summary, body);
   return card;
 }
 
-const records = interviewRounds.map((round) => {
-  const previous = companies.get(round.company);
-  companies.set(round.company, {
-    count: (previous?.count ?? 0) + 1,
-    example: (previous?.example ?? true) && Boolean(round.example),
-  });
-  for (const tag of round.tags) tagSet.add(tag);
+for (const round of interviewRounds) {
+  if (!companies.has(round.company)) companies.set(round.company, { records: [] });
   questionTotal += round.questions.length;
 
-  const card = makeRound(round);
-  roundList.append(card);
   const searchableText = normalize([
     round.company,
     round.title,
     round.round,
     round.date,
-    ...round.tags,
-    ...round.questions.flatMap(({ question, answer }) => [question, answer]),
+    ...(round.keywords ?? round.tags ?? []),
+    ...round.questions.flatMap(({ question, answer, note }) => [question, answer, note?.text]),
   ].join(' '));
-  return { round, card, searchableText };
-});
+  companies.get(round.company).records.push({ round, card: makeRound(round), searchableText });
+}
 
 const stats = document.getElementById('stats');
 for (const [label, value] of [
+  ['公司', companies.size],
+  ['面试场次', interviewRounds.length],
   ['题目', questionTotal],
-  ['面经条目', records.length],
-  ['技术标签', tagSet.size],
 ]) {
   const stat = element('div', 'stat');
   stat.append(element('dt', '', label), element('dd', '', value));
@@ -136,58 +154,57 @@ function updateLibrary() {
   for (const button of companyList.children) {
     button.setAttribute('aria-pressed', String(button.value === selectedCompany));
   }
-  for (const button of filterList.children) {
-    button.setAttribute('aria-pressed', String(button.value ? selectedTags.has(button.value) : !selectedTags.size));
-  }
 
+  let companyCount = 0;
   let rounds = 0;
   let questions = 0;
-  for (const { round, card, searchableText } of records) {
-    const matches = (!selectedCompany || round.company === selectedCompany)
-      && [...selectedTags].every((tag) => round.tags.includes(tag))
-      && terms.every((term) => searchableText.includes(term));
-    card.hidden = !matches;
-    if (matches) {
-      rounds += 1;
-      questions += round.questions.length;
+  for (const [name, { records, section, heading }] of companies) {
+    const companyMatches = !selectedCompany || name === selectedCompany;
+    let visibleRounds = 0;
+    for (const { round, card, searchableText } of records) {
+      const matches = companyMatches && terms.every((term) => searchableText.includes(term));
+      card.hidden = !matches;
+      if (matches) {
+        visibleRounds += 1;
+        questions += round.questions.length;
+      }
     }
+    heading.hidden = Boolean(selectedCompany);
+    section.hidden = !visibleRounds;
+    companyCount += Number(visibleRounds > 0);
+    rounds += visibleRounds;
   }
-  catalogueTitle.textContent = selectedCompany || '全部面经';
-  resultCount.textContent = rounds + ' 条面经 · ' + questions + ' 道题';
+  catalogueTitle.textContent = selectedCompany || '全部公司';
+  const count = rounds + ' 场面经 · ' + questions + ' 道题';
+  resultCount.textContent = selectedCompany ? count : companyCount + ' 家公司 · ' + count;
   empty.hidden = rounds > 0;
 }
 
-document.getElementById('nav-total').textContent = records.length;
+document.getElementById('nav-total').textContent = companies.size;
 allCompanies.addEventListener('click', () => {
   selectedCompany = '';
   updateLibrary();
 });
-const sortedCompanies = [...companies].sort(([nameA, companyA], [nameB, companyB]) => (
-  Number(companyA.example) - Number(companyB.example) || nameA.localeCompare(nameB, 'zh-CN')
-));
-for (const [name, { count }] of sortedCompanies) {
+const sortedCompanies = [...companies].sort(([nameA], [nameB]) => nameA.localeCompare(nameB, 'zh-CN'));
+for (const [name, company] of sortedCompanies) {
   const button = element('button', 'nav-item');
   button.type = 'button';
   button.value = name;
-  button.append(icon('company'), element('span', '', name), element('span', 'nav-count', count));
+  button.append(icon('company'), element('span', '', name), element('span', 'nav-count', company.records.length));
   button.addEventListener('click', () => {
     selectedCompany = name;
     updateLibrary();
   });
   companyList.append(button);
-}
 
-for (const tag of ['', ...tagSet]) {
-  const button = element('button', 'filter-button', tag || '全部');
-  button.type = 'button';
-  button.value = tag;
-  button.addEventListener('click', () => {
-    if (!tag) selectedTags.clear();
-    else if (selectedTags.has(tag)) selectedTags.delete(tag);
-    else selectedTags.add(tag);
-    updateLibrary();
-  });
-  filterList.append(button);
+  company.section = element('section', 'company-group');
+  company.section.setAttribute('aria-label', name);
+  company.heading = element('h3', 'company-heading');
+  company.heading.append(icon('company'), name);
+  const list = element('div', 'round-list');
+  list.append(...company.records.map(({ card }) => card));
+  company.section.append(company.heading, list);
+  companyGroups.append(company.section);
 }
 
 document.getElementById('search-form').addEventListener('submit', (event) => event.preventDefault());
@@ -210,12 +227,11 @@ search.addEventListener('keydown', (event) => {
 });
 reset.addEventListener('click', () => {
   selectedCompany = '';
-  selectedTags.clear();
   search.value = '';
   search.focus();
   updateLibrary();
 });
-if (!records.length) {
+if (!interviewRounds.length) {
   document.getElementById('empty-title').textContent = '题库还没有题目';
   document.getElementById('empty-message').hidden = true;
   reset.hidden = true;
