@@ -155,7 +155,7 @@ interviewRounds.push({
         },
         {
           question: 'Tree Attention Mask 怎么构造？拿到 logits 后怎么判断接受几个 token？',
-          answer: '给摊平后的每个节点存一个整数父索引，让父节点排在子节点前。构造布尔 mask 时，让节点 i 先看自己，然后把父节点的可见行并进来，即 mask[i] = mask[parent[i]] OR one_hot(i)。根只看自己，历史前缀的 KV 对所有节点可见。参考实现用父索引和布尔矩阵递推。GPU attention 读 mask 和位置元数据。\n\nGreedy 接受时看父节点的 logits。子 token 等于父 logits 的 argmax 才继续沿这条路径。参考实现用 retrieve_indices 还原根到叶，逐位比对后取最长连续匹配前缀。第一个不匹配的位置由 Target 续写，其他分支的 KV 可以回收。\n\n参考实现的随机采样分支在同一父节点下依次尝试互异的子 token，按当前目标剩余分布中该 token 的概率接受。拒绝一个就移除其概率质量并重新归一化。某个子节点通过就继续向下，都未通过就按剩余分布补采。',
+          answer: '先摊平树，再存一个 parent 数组，元素是父节点的整数下标。保证父节点在子节点前，就能逐行构造 mask。根在树内只看自己，每个子节点复制父节点的可见行，再把自己的列设为可见。所有节点都能读已确认前缀的 KV。\n\nTarget 的第 i 行 logits 预测节点 i 之后的 token。Greedy 验证从根开始，拿当前行的 argmax 去找匹配的子节点。每找到一个就接受一个草稿 token，再用这个子节点自己的 logits 验下一步。找不到子节点时，由该行 argmax 给出 Target 续写的 token。\n\n参考实现用 retrieve_indices 把扁平 logits 拿回每条路径，比较「父节点 argmax」和「子 token」，再用累积乘积求最长连续匹配前缀。下面的伪代码用逐节点走树来展示同样的 Greedy 判断。随机采样分支则依次尝试同一父节点下互异的子 token，每次拒绝后移除该 token 的概率质量并重新归一化。',
           example: {
             tree: '已确认前缀 → r\n             ├─ A\n             │  └─ C\n             └─ B',
             table: {
@@ -168,7 +168,47 @@ interviewRounds.push({
                 ['C', '1', '1', '0', '1'],
               ],
             },
-            text: 'C 继承 A 的可见范围，因此看到 r 和 A，再加上自己。A 和 B 深度相同、position ID 相同，但互不可见。如果 Target 在 r 处预测 A，在 A 处预测 C，就接受 A、C 两个草稿 token。若 r 处预测 B，树上只有 B 可接受，此后由 B 的 logits 给出下一 token。',
+            text: '节点下标依次是 r=0、A=1、B=2、C=3，对应 parent=[-1, 0, 0, 1]。C 的父节点是 A，所以第 3 行复制第 1 行，再打开 C 自己的列，得到 [1, 1, 0, 1]。若前缀长度是 L，四个节点的 position ID 分别是 [L, L+1, L+1, L+2]。\n\nlogits[0] 是读完 r 后的预测，用来验证 A 或 B。logits[1] 是读完 r→A 后的预测，用来验证 C。B 和 C 都是叶子，它们各自的 logits 可以给出下一 token。\n\n例如 logits[0] 的 argmax 是 A，logits[1] 的 argmax 是 C，logits[3] 的 argmax 是 X。走到 C 后找不到下一子节点，所以 accept_length=2，数的是 A、C。r 是上一轮已选的 anchor，X 是本轮 Target 续写的 token。此时保留 r、A、C 已计算的 KV。',
+            code: {
+              caption: '从父索引到接受长度的 Greedy 伪代码',
+              text: `tokens = [r, A, B, C]
+parent = [-1, 0, 0, 1]
+n = len(tokens)
+mask = [[False] * n for _ in range(n)]
+positions = [prefix_len] * n
+children = [[] for _ in range(n)]
+
+# 父节点先处理，子节点继承父行再打开自己
+for i, p in enumerate(parent):
+    if p >= 0:
+        mask[i] = mask[p].copy()
+        positions[i] = positions[p] + 1
+        children[p].append(i)
+    mask[i][i] = True
+
+# logits[i] 是经过节点 i 之后的 next-token 分布
+logits = target_forward(
+    tokens, prefix_kv, mask, positions
+)
+
+node = 0
+accepted_rows = []
+while True:
+    next_token = argmax(logits[node])
+    child = None
+    for candidate in children[node]:
+        if tokens[candidate] == next_token:
+            child = candidate
+            break
+    if child is None:
+        break
+    accepted_rows.append(child)
+    node = child
+
+accept_length = len(accepted_rows)
+keep_kv_rows = [0] + accepted_rows
+# 示例结果是 2、[0, 1, 3]、next_token = X`,
+            },
           },
           sources: [eagleTree, eagleVerify],
         },

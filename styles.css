@@ -168,10 +168,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 }
 .questions + .question-section-title { border-top: 1px solid #eeebf4; }
 .questions { margin: 0; padding: 0 0 0 2.05rem; }
-.questions li { padding: .95rem 0 .95rem .2rem; }
-.questions li + li { border-top: 1px solid #eeebf4; }
-.questions li::marker { color: var(--purple-ink); font-weight: 650; }
-.questions :is(h4, h5) { margin: 0; font-size: 1rem; line-height: 1.55; }
+.questions > li { padding-left: .2rem; }
+.questions > li + li { border-top: 1px solid #eeebf4; }
+.questions > li::marker { color: var(--purple-ink); font-weight: 650; }
+.question > summary {
+  padding: .78rem .45rem .78rem 0; cursor: pointer; list-style: none; border-radius: .36rem;
+  -webkit-tap-highlight-color: #eee7fc;
+}
+.question > summary::-webkit-details-marker { display: none; }
+.question > summary:hover { color: var(--purple-ink); }
+.question > summary :is(h4, h5) {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem;
+  margin: 0; font-size: 1rem; line-height: 1.55; overflow-wrap: anywhere;
+}
+.question-toggle { flex: 0 0 1rem; position: relative; height: 1rem; margin-top: .27rem; color: var(--purple-ink); }
+.question-toggle::before, .question-toggle::after {
+  position: absolute; inset: 50% auto auto 50%; width: .65rem; height: 1.5px;
+  transform: translate(-50%, -50%); border-radius: 1px; background: currentColor; content: "";
+}
+.question-toggle::after { transform: translate(-50%, -50%) rotate(90deg); }
+.question[open] > summary .question-toggle::after { display: none; }
+.question-answer { min-width: 0; padding: 0 .45rem .95rem 0; }
 .questions p { max-width: 48rem; margin: .38rem 0 0; color: #4d445e; font-size: 1rem; line-height: 1.75; overflow-wrap: anywhere; white-space: pre-line; }
 .question-details { max-width: 48rem; margin-top: .55rem; }
 .question-details > summary {
@@ -197,6 +214,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
   margin: 0 0 .68rem; padding: .55rem .7rem; border: 1px solid #e7def2; border-radius: .36rem;
   background: #fff; color: #453366; white-space: pre-wrap; font: .94rem/1.5 ui-monospace, monospace;
 }
+.answer-code { margin: .82rem 0 0; }
+.answer-code figcaption { margin-bottom: .38rem; color: #453366; font-size: .9rem; font-weight: 680; }
+.answer-code pre {
+  margin: 0; padding: .7rem .75rem; border: 1px solid #e7def2; border-radius: .36rem;
+  overflow-x: auto; background: #fff; color: #33274a; font: .88rem/1.55 ui-monospace, monospace;
+}
+.answer-code code { font: inherit; }
 .references {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .8rem; margin-top: .45rem;
   color: var(--muted); font-size: .86rem; line-height: 1.6;

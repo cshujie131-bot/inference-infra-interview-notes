@@ -42,7 +42,7 @@ function makeReferences(sources) {
   return references;
 }
 
-function makeQuestionContent({ table: exampleTable, tree, text }) {
+function makeQuestionContent({ table: exampleTable, tree, text, code }) {
   const content = element('div', 'question-detail-content');
   if (tree) content.append(element('pre', 'tree-example', tree));
   if (exampleTable) {
@@ -67,6 +67,13 @@ function makeQuestionContent({ table: exampleTable, tree, text }) {
   for (const paragraph of text.split('\n\n')) {
     content.append(element('p', '', paragraph));
   }
+  if (code) {
+    const figure = element('figure', 'answer-code');
+    const block = element('pre');
+    block.append(element('code', '', code.text));
+    figure.append(element('figcaption', '', code.caption), block);
+    content.append(figure);
+  }
   return content;
 }
 
@@ -75,15 +82,25 @@ function makeQuestionList(questions, heading, firstNumber) {
   if (firstNumber !== 1) list.start = firstNumber;
   for (const { question, answer, example, note, sources } of questions) {
     const item = element('li');
-    item.append(element(heading, '', question));
-    for (const paragraph of answer.split('\n\n')) item.append(element('p', '', paragraph));
-    if (example) item.append(makeQuestionContent(example));
+    const questionCard = element('details', 'question');
+    const prompt = element('summary');
+    const title = element(heading);
+    const toggle = element('span', 'question-toggle');
+    toggle.setAttribute('aria-hidden', 'true');
+    title.append(element('span', '', question), toggle);
+    prompt.append(title);
+
+    const answerBody = element('div', 'question-answer');
+    for (const paragraph of answer.split('\n\n')) answerBody.append(element('p', '', paragraph));
+    if (example) answerBody.append(makeQuestionContent(example));
     if (note) {
       const details = element('details', 'question-details');
       details.append(element('summary', '', '项目补充'), makeQuestionContent(note));
-      item.append(details);
+      answerBody.append(details);
     }
-    if (sources?.length) item.append(makeReferences(sources));
+    if (sources?.length) answerBody.append(makeReferences(sources));
+    questionCard.append(prompt, answerBody);
+    item.append(questionCard);
     list.append(item);
   }
   return list;
