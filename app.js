@@ -42,21 +42,19 @@ function makeReferences(sources) {
   return references;
 }
 
-function makeQuestionDetails(note) {
-  const details = element('details', 'question-details');
-  details.append(element('summary', '', '相关细节'));
+function makeQuestionContent({ table: exampleTable, tree, text }) {
   const content = element('div', 'question-detail-content');
-  if (note.table) {
+  if (exampleTable) {
     const table = element('table', 'example-table');
-    table.append(element('caption', '', note.table.caption));
+    table.append(element('caption', '', exampleTable.caption));
     const header = table.createTHead().insertRow();
-    for (const title of note.table.columns) {
+    for (const title of exampleTable.columns) {
       const cell = element('th', '', title);
       cell.scope = 'col';
       header.append(cell);
     }
     const body = table.createTBody();
-    for (const [label, ...values] of note.table.rows) {
+    for (const [label, ...values] of exampleTable.rows) {
       const row = body.insertRow();
       const heading = element('th', '', label);
       heading.scope = 'row';
@@ -65,12 +63,11 @@ function makeQuestionDetails(note) {
     }
     content.append(table);
   }
-  if (note.tree) content.append(element('pre', 'tree-example', note.tree));
-  for (const paragraph of note.text.split('\n\n')) {
+  if (tree) content.append(element('pre', 'tree-example', tree));
+  for (const paragraph of text.split('\n\n')) {
     content.append(element('p', '', paragraph));
   }
-  details.append(content);
-  return details;
+  return content;
 }
 
 function makeRound(round) {
@@ -109,10 +106,16 @@ function makeRound(round) {
 
   const body = element('div', 'round-body');
   const list = element('ol', 'questions');
-  for (const { question, answer, note, sources } of round.questions) {
+  for (const { question, answer, example, note, sources } of round.questions) {
     const item = element('li');
-    item.append(element('h4', '', question), element('p', '', answer));
-    if (note) item.append(makeQuestionDetails(note));
+    item.append(element('h4', '', question));
+    for (const paragraph of answer.split('\n\n')) item.append(element('p', '', paragraph));
+    if (example) item.append(makeQuestionContent(example));
+    if (note) {
+      const details = element('details', 'question-details');
+      details.append(element('summary', '', '项目补充'), makeQuestionContent(note));
+      item.append(details);
+    }
     if (sources?.length) item.append(makeReferences(sources));
     list.append(item);
   }
@@ -132,7 +135,7 @@ for (const round of interviewRounds) {
     round.round,
     round.date,
     ...(round.keywords ?? round.tags ?? []),
-    ...round.questions.flatMap(({ question, answer, note }) => [question, answer, note?.text]),
+    ...round.questions.flatMap(({ question, answer, example, note }) => [question, answer, example?.text, note?.text]),
   ].join(' '));
   companies.get(round.company).records.push({ round, card: makeRound(round), searchableText });
 }

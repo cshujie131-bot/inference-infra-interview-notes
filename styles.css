@@ -176,7 +176,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 }
 .question-details > summary:hover { background: #f3edfc; }
 .question-detail-content {
-  margin-top: .35rem; padding: .66rem .8rem; border-left: 2px solid #cfbdf1;
+  max-width: 48rem; margin-top: .55rem; padding: .66rem .8rem; border-left: 2px solid #cfbdf1;
   border-radius: 0 .38rem .38rem 0; background: #f8f5fd;
 }
 .question-detail-content p { margin: 0; }
