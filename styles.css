@@ -163,11 +163,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 }
 .round[open] .chevron { transform: translateY(.22rem) rotate(225deg); }
 .round-body { padding: 0 1.08rem 1.05rem; border-top: 1px solid #eeebf4; }
+.question-section-title {
+  margin: 0; padding: .8rem 0 .1rem .55rem; color: #513889; font-size: 1.08rem; line-height: 1.5;
+}
+.questions + .question-section-title { border-top: 1px solid #eeebf4; }
 .questions { margin: 0; padding: 0 0 0 2.05rem; }
 .questions li { padding: .95rem 0 .95rem .2rem; }
 .questions li + li { border-top: 1px solid #eeebf4; }
 .questions li::marker { color: var(--purple-ink); font-weight: 650; }
-.questions h4 { margin: 0; font-size: 1rem; line-height: 1.55; }
+.questions :is(h4, h5) { margin: 0; font-size: 1rem; line-height: 1.55; }
 .questions p { max-width: 48rem; margin: .38rem 0 0; color: #4d445e; font-size: 1rem; line-height: 1.75; overflow-wrap: anywhere; white-space: pre-line; }
 .question-details { max-width: 48rem; margin-top: .55rem; }
 .question-details > summary {

@@ -95,3 +95,156 @@ const interviewRounds = [
     ],
   },
 ];
+
+const vllmSpeculative = { label: 'vLLM 投机解码配置', url: 'https://docs.vllm.ai/en/latest/features/speculative_decoding/' };
+const vllmDFlash = { label: 'vLLM DFlash 实现', url: 'https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu/spec_decode/dflash/speculator/' };
+const vllmDSpark = { label: 'vLLM DSpark 实现', url: 'https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu/spec_decode/dspark/speculator/' };
+const sglangDFlash = { label: 'SGLang DFlash worker', url: 'https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/speculative/dflash_worker_v2.py' };
+const sglangDSpark = { label: 'SGLang DSpark 部署示例', url: 'https://github.com/sgl-project/sglang/blob/main/docs/cookbook/autoregressive/DeepSeek/DeepSeek-V4.mdx' };
+const eagleTree = { label: 'EAGLE-3 构树代码', url: 'https://github.com/SafeAILab/EAGLE/blob/main/eagle/model/cnets.py#L670-L807' };
+const eagleVerify = { label: 'EAGLE-3 验证和 KV 提交代码', url: 'https://github.com/SafeAILab/EAGLE/blob/main/eagle/model/utils.py#L306-L449' };
+const moeSpeculation = { label: 'Utility-Driven Speculative Decoding for MoE', url: 'https://arxiv.org/html/2506.20675' };
+const magicDec = { label: 'MagicDec 项目页', url: 'https://infini-ai-lab.github.io/MagicDec-part1/' };
+const gptq = { label: 'GPTQ 论文', url: 'https://arxiv.org/abs/2210.17323' };
+const smoothQuant = { label: 'SmoothQuant 论文', url: 'https://proceedings.mlr.press/v202/xiao23c.html' };
+const fp8Schemes = { label: 'LLM Compressor 的 FP8 方案', url: 'https://docs.vllm.ai/projects/llm-compressor/en/latest/guides/compression_schemes/' };
+
+interviewRounds.push({
+  id: 'microsoft-inference-infra',
+  company: '微软',
+  title: '推理 Infra 面试',
+  keywords: ['投机解码', 'MoE', '模型量化'],
+  sections: [
+    {
+      title: '投机解码',
+      questions: [
+        {
+          question: 'EAGLE3、DFlash、DSpark 三者的区别是什么？',
+          answer: '主要区别是草稿如何生成，以及 Target 一次验证多少候选。三者都利用 Target 的特征起草，由 Target 负责最终验收。\n\nEAGLE-3 融合 Target 的低、中、高层特征，Draft 自回归出候选，再用动态树覆盖多条后续路径。DFlash 把 Target 特征注入各 Draft 层的上下文 KV，用一次 block diffusion 前向并行生成整块候选，缩短起草关键路径。\n\nDSpark 保留 DFlash 的并行骨干，再用轻量 Markov head 根据上一个实际采到的 token 修正当前 logits，改善块内一致性。它还可以预测每个位置的条件接受率，结合负载决定验证多长。实际收益取决于起草耗时、每轮接受长度和 Target 验证成本。',
+          sources: [eagle3, dflash, dspark],
+        },
+        {
+          question: 'DFlash / DSpark 在实际推理时需要哪些输入？接入 vLLM / SGLang 的整体流程是什么？',
+          answer: '启动时需要匹配的 Target 和 Draft 权重或内置 draft head、要捕获的 Target 层、anchor / mask 配置和 block size。每轮运行时，Draft 接收已确认前缀的 Target 多层特征（可先投影成 Draft KV）、Target 已选出的 anchor token、用于构成 query block 的 mask token，以及 position IDs 和 KV slot 元数据。\n\n流程是「Target prefill 捕获特征 → 投影并缓存 Draft 上下文 KV → Draft 用块内双向注意力一次算出块 logits → Target 以因果注意力验证候选 → 提交有效前缀和相应 KV → 更新特征与下轮 anchor」。DSpark 在块 logits 上做轻量串行修正。启用自适应验证时，调度器在 Target 前向前选定候选长度。\n\nvLLM 的 speculative config 用 method=dflash 或 dspark，按 checkpoint 配置 model 和草稿长度。SGLang 对应 DFLASH / DSPARK，外置草稿用 speculative-draft-model-path，带内置 head 的 checkpoint 可从 Target checkpoint 加载。对照 checkpoint 是否在 anchor 位置也生成候选，再确定草稿数量和实际验证宽度。DSpark 也可走固定宽度验证，是否启用置信度调度取决于后端和配置。',
+          sources: [vllmSpeculative, vllmDFlash, vllmDSpark, sglangDFlash, sglangDSpark],
+        },
+        {
+          question: 'EAGLE3 需要维护 KV Cache，DFlash、DSpark 也需要吗？',
+          answer: '需要。三者都要维护 Target 的主 KV Cache，以及 Draft 侧用于读历史前缀的缓存。差异是 Draft KV 怎么来的。EAGLE-3 的 Draft 自回归扩展，Draft 层前向会产生自己的 KV，树分支有临时状态。DFlash / DSpark 主要把已确认 token 的 Target hidden states 投影成 Draft 各层的上下文 K/V，再跨轮复用。\n\n本轮 mask block 用于生成候选。下一轮的持久上下文由已经验证并提交的位置推进。DSpark 的 Markov head 还读块内上一个采样结果，这个依赖由轻量 head 处理。工程上 Target 和 Draft 可以共享逻辑 token 索引或分配设施，各自仍按自己的层布局保存 KV。',
+          sources: [eagleTree, dflash, vllmDFlash, vllmDSpark],
+        },
+        {
+          question: 'Target 产生的 Hidden States 和 KV Cache，DFlash、DSpark 分别怎么用？',
+          answer: 'Hidden states 用来给 Draft 提供上下文，Target KV 用来给 Target 自己验证。以 DFlash 为例，先捕获 Target 指定层的 hidden states，拼接并投影得到上下文特征，再经每个 Draft 层自己的 K/V 投影写入 Draft cache。验证后只用已提交位置对应的 Target 特征更新 Draft cache。\n\nTarget 验证时读自己的历史 KV，并为本轮候选计算因果 logits 和临时 KV。验收后提交命中前缀，释放或覆盖其余候选 slot。DSpark 沿用这条上下文 KV 路径，再用 Markov head 修正块 logits，并可用 confidence head 给调度器提供接受率估计。',
+          sources: [dflash, dspark, vllmDFlash, sglangDFlash],
+        },
+        {
+          question: '为什么 MoE 的投机解码收益通常不能随一次 Verify 的 token 数近似线性提升？',
+          answer: '低 batch 的 Dense decode 常受权重带宽限制。同一层验证多个 token 时，它们能复用同一套权重，因此 Verify 增加的时间有时小于 token 数增加的比例。MoE 的每个 token 可能路由到不同专家，验证更多位置会扩大这一轮激活的专家并集，读更多专家权重。\n\n收益还取决于真正通过验证的前缀有多长。后面被拒掉的候选也已经做了 routing、专家计算和 attention。启用 Expert Parallelism 时，还可能增加 dispatch / combine 通信。工程上应扫草稿长度和并发，比较「每轮总耗时 ÷ 每轮产出 token 数」，同时看各层专家并集和接受长度。',
+          sources: [moeSpeculation, speculativeSampling],
+        },
+        {
+          question: 'EAGLE3 的 Proposal → Verify → Accept 三个阶段分别怎么做？',
+          answer: 'Proposal。Target 先选出起始 token，Draft 利用 Target 多层特征和采样 token 的 embedding 起步，用轻量解码层自回归展开候选树。向更深的分支走时，Draft 接着使用自己生成的中间表示。\n\nVerify。把节点摊平，给每个节点按树深度设 position ID，用 Tree Attention 保留各路径自己的历史。Target 一次 forward 算出树上各节点的 next-token logits。\n\nAccept。Greedy 时逐层取父节点 logits 的 argmax，沿匹配的子节点走，直到缺少匹配或到叶子。提交已通过路径的 KV，再由 Target 提供下一个 token。随机模式使用相应的树采样验证规则。统计时要区分接受的草稿 token、已经选定的起始 token 和 Target 新采样的 token。',
+          sources: [eagle3, eagleTree, eagleVerify],
+        },
+        {
+          question: 'EAGLE3 的 Proposal 怎么生成 Tree？怎么防止树无限膨胀？',
+          answer: '从 Target 已选出的 anchor 开始，Draft 对每个活跃节点取局部 top-k 子节点。用「父路径累计 log-prob + 子 token 的条件 log-prob」给完整路径打分。同一深度将候选合在一起，只选分数最高的一批继续扩展。\n\n参考实现同时限制每层继续扩展的宽度、最大深度和送给 Target 的总节点数。展开结束后按累计分数做全局裁剪，记录保留节点的父索引。比如 A 的单步概率是 0.6，B 是 0.4，但 A→A1 累计只有 0.6×0.4=0.24，B→B1 有 0.4×0.8=0.32，预算紧时更优先保留 B→B1。',
+          sources: [eagle3, eagleTree],
+        },
+        {
+          question: 'Tree Attention Mask 怎么构造？拿到 logits 后怎么判断接受几个 token？',
+          answer: '给摊平后的每个节点存一个整数父索引，让父节点排在子节点前。构造布尔 mask 时，让节点 i 先看自己，然后把父节点的可见行并进来，即 mask[i] = mask[parent[i]] OR one_hot(i)。根只看自己，历史前缀的 KV 对所有节点可见。参考实现用父索引和布尔矩阵递推。GPU attention 读 mask 和位置元数据。\n\nGreedy 接受时看父节点的 logits。子 token 等于父 logits 的 argmax 才继续沿这条路径。参考实现用 retrieve_indices 还原根到叶，逐位比对后取最长连续匹配前缀。第一个不匹配的位置由 Target 续写，其他分支的 KV 可以回收。\n\n参考实现的随机采样分支在同一父节点下依次尝试互异的子 token，按当前目标剩余分布中该 token 的概率接受。拒绝一个就移除其概率质量并重新归一化。某个子节点通过就继续向下，都未通过就按剩余分布补采。',
+          example: {
+            tree: '已确认前缀 → r\n             ├─ A\n             │  └─ C\n             └─ B',
+            table: {
+              caption: '摊平顺序为 r、A、B、C。1 表示可见',
+              columns: ['Query / Key', 'r', 'A', 'B', 'C'],
+              rows: [
+                ['r', '1', '0', '0', '0'],
+                ['A', '1', '1', '0', '0'],
+                ['B', '1', '0', '1', '0'],
+                ['C', '1', '1', '0', '1'],
+              ],
+            },
+            text: 'C 继承 A 的可见范围，因此看到 r 和 A，再加上自己。A 和 B 深度相同、position ID 相同，但互不可见。如果 Target 在 r 处预测 A，在 A 处预测 C，就接受 A、C 两个草稿 token。若 r 处预测 B，树上只有 B 可接受，此后由 B 的 logits 给出下一 token。',
+          },
+          sources: [eagleTree, eagleVerify],
+        },
+        {
+          question: '非 Greedy 的采样模式下，Rejection Sampling 怎么保证最终分布不变？',
+          answer: '在同一个已接受前缀上，令 p 为 Target 实际采样分布，q 为 Draft 实际提议分布。候选 x 从 q 抽取，以 min(1, p(x)/q(x)) 接受。直接留下 x 的概率质量是 min(p(x),q(x))。若拒绝，按 [p−q]₊ 归一化后的分布补采，拒绝的总概率恰好等于这些缺口的总和。所以两条路径合起来正好得到 p。\n\n按位置顺序验证。第一次拒绝后，剩余草稿基于旧前缀，直接丢弃。全接受时，可从 Target 下一位置分布采一个 bonus token。temperature、top-p 等处理后的实际 p 和 q 才能代入。树形候选需要使用与其提议方式匹配的树验证算法。',
+          sources: [speculativeSampling, eagleVerify],
+        },
+        {
+          question: 'Speculative Decoding 为什么能加速 Decode？',
+          answer: '把多次串行 Target 解码合成一轮 Draft + Verify。Draft 先便宜地生成 K 个候选，Target 把候选当已知输入做一次并行因果前向，顺序筛出能提交的前缀。一轮能产出多个 token，就减少了重复跑 Target 和读大权重的次数。\n\n粗略加速比是「每轮产出的 token 数 × 普通 decode 每 token 时间 ÷（起草 + 验证 + 采样调度时间）」。K 太大时，验证会变贵，额外候选也更容易落在第一个拒绝之后。最终选的是单位输出成本最低的 K。',
+          sources: [speculativeSampling, moeSpeculation],
+        },
+        {
+          question: '为什么 Decode 通常是 Memory Bound？一次 Verify 多个 token 为什么能提高 GPU 利用率？',
+          answer: '低并发 Decode 每条请求每步只处理一个新 token。大量线性层近似小 M 的 GEMM 或 GEMV，权重要从 HBM 读进来，却只服务少量向量，FLOPs / Byte 很低。长上下文下，还要读很长的历史 KV，attention 也会吃带宽。\n\n一次 Verify 多个位置会增大 GEMM 的 M 维，多行复用同一块权重，提高算术强度和 Tensor Core 利用率。仍处在带宽瓶颈时，验证多个位置的时间可能只比单步稍长。大 batch、长上下文或 K 过大时，计算、KV 读取和临时状态的成本会上升，需要实测。',
+          sources: [speculativeSampling, magicDec, moeSpeculation],
+        },
+        {
+          question: '只考虑单 GPU，为什么 MoE 投机解码效率仍可能不如 Dense？',
+          answer: '即使专家全在一张卡上，路由分散也会使每个专家收到的 token 数很小。验证批在全局上变大，却被拆成许多小而不均匀的 GEMM，专家内的权重复用有限。HBM 还得读更多被激活的专家权重，token 排序、gather / scatter 和 combine 也消耗本卡带宽。\n\n举个简化例子。8 个专家、独立均匀 top-1 路由时，验证 1 个位置只用 1 个专家，验证 4 个位置期望用到 8×(1−(7/8)⁴)≈3.31 个专家。Dense 的 4 个位置能反复用同一套权重。实际路由越集中，专家复用越好，因此应看各层专家并集和每个专家的 token 分布。',
+          sources: [moeSpeculation],
+        },
+        {
+          question: '还有哪些投机解码新工作？超长 Context 下有什么不同？',
+          answer: '近期可以看 DPara。它在 Target 验证当前块时，为可能的接受边界预计算下一轮 Draft 表示，等真实验收边界和 bonus token 出来，再用轻量 head 接上，把大部分起草计算和验证重叠。\n\n长上下文主要多了历史 KV 的读取成本。TriForce 做层级投机，先用小模型起草，再用 Target 权重加检索出的稀疏 KV 做中间验证，最后由完整 Target 验收。MagicDec 则给 Draft 使用有界大小的稀疏 KV，缓解大 batch、长上下文下的起草带宽压力。最终 Target 按自身的完整验证语义验收，Draft 或中间阶段的近似主要改变接受率和速度。',
+          sources: [
+            { label: 'DPara 论文', url: 'https://arxiv.org/abs/2609.27396' },
+            { label: 'TriForce 论文', url: 'https://arxiv.org/abs/2404.11912' },
+            magicDec,
+          ],
+        },
+        {
+          question: 'Draft Model 怎么训练？训练数据从哪里来、规模多大？',
+          answer: '通常冻结 Target，用有代表性的对话、代码和数学 prompts 让它生成续写，再采集续写 token、指定层的 hidden states，以及方法需要的 Target logits。用这些样本训练轻量 Draft，使它在真实前缀上尽可能贴近 Target。\n\nEAGLE-3 做 Training-Time Test，在训练中多步展开 Draft，让它习惯读自己产生的表示。DFlash 在 Target 续写中随机选 anchor，遮住后面的 block，用偏重前部位置的交叉熵并行预测。DSpark 还加了分布匹配和置信度损失，直接学习接受概率。\n\n公开数据口径各异。EAGLE-3 论文列出约 6.8 万条 ShareGPT 和 46.4 万条 UltraChat 数据。DFlash 论文混用约 80 万条 NVIDIA Nemotron Post-Training Dataset V2 和 CodeAlpaca 样本。DSpark 的对比实验用约 130 万条 Open-PerfectBlend prompts，请各 Target 重新生成答案。比较规模时要同时报训练 token 数、序列长度和训练轮数。',
+          sources: [eagle3, dflash, dspark, { label: 'DeepSpec 训练代码', url: 'https://github.com/deepseek-ai/DeepSpec' }],
+        },
+        {
+          question: 'Draft Model 的 Loss 曲线怎么看？怎么判断训练完成？',
+          answer: '先看训练和验证 Loss 是否稳定，再按草稿位置拆开看。第一个位置错会截断整条接受前缀，前几位的错误对线上效率更敏感。DSpark 还要分别看 token 预测、分布匹配和置信度损失。置信度需要对照实际接受率做校准。\n\n选 checkpoint 要跑真实 Draft → Verify rollout。固定 Target、采样方式、草稿预算与并发，在未见过的任务上看分位置接受率、每轮产出、draft 耗时和 TPOT。验证收益连续几个 checkpoint 进入平台期，就可停止训练，从满足时延目标的 checkpoint 中选效果最好的。',
+          sources: [eagle3, dspark],
+        },
+      ],
+    },
+    {
+      title: '量化',
+      questions: [
+        {
+          question: 'AWQ 和 GPTQ 的核心区别是什么？两者怎么做？',
+          answer: '两者都可做权重的离线低比特量化，差别在于怎么减少输出误差。AWQ 根据校准激活识别重要输入通道，量化前用等价的通道缩放放大显著权重，并把逆缩放折入上游算子。典型实现用校准样本的层输出误差选择缩放与裁剪，再按组量化权重。\n\nGPTQ 根据校准输入估计层重构误差的 Hessian。若 W 是 [out, in]，X 是输入列向量组成的矩阵，目标是减小 ‖WX−ŴX‖²。它依序量化 W 的列，并用逆 Hessian 信息调整之后还没量化的列，补偿已经引入的误差。AWQ 的重点是选通道缩放，GPTQ 的重点是逐列误差补偿。',
+          sources: [awq, gptq],
+        },
+        {
+          question: 'FP8 W8A8 怎么选 Scale？Calibration Data 有什么用？',
+          answer: '先选 kernel 支持的 FP8 格式和 scale 粒度，例如权重 per-channel / per-block、激活静态 per-tensor 或动态 per-token。用 q=cast_fp8(clip(x/s)) 的约定，最简单的 scale 是该组 amax 除以格式的最大有限值，比如 E4M3 的 448。更激进的 clipping 可以减弱极少数离群值对大多数值分辨率的影响。\n\n静态激活 scale 用有代表性的校准样本统计激活范围，可比较不同 clipping 阈值下的层输出误差。动态 scale 在推理时按当前 token 或块算 amax，并把归约、cast 的成本计入性能。若叠加 AWQ 式通道等价缩放，还要校准这组通道缩放，并验证 W 与 A 一起量化后的误差。',
+          sources: [awq, fp8Schemes, { label: 'FP8 格式论文', url: 'https://arxiv.org/abs/2209.05433' }],
+        },
+        {
+          question: '量化时应该比较 Weight Error 还是 Output Reconstruction Error？',
+          answer: '选 scale 或 clipping 时，通常优先看层输出重构误差。Weight Error 把所有权重差值同等看待，层输出误差 ‖(W−Ŵ)X‖² 会考虑校准输入的尺度和相关性。例如某个输入通道很活跃，那一列相同大小的权重量化误差，可能给层输出带来更大的扰动。\n\n对 W8A8，应把量化后的激活也纳入计算，即比较原始 WX 和实际量化路径得到的 ŴX̂。Weight Error 仍适合快速定位饱和或异常层。最终要在独立数据上验证端到端精度。',
+          sources: [awq, gptq, smoothQuant],
+        },
+        {
+          question: 'SmoothQuant 和 AWQ 的区别是什么？为什么可以放在一起比较？',
+          answer: '它们都用校准激活决定输入通道的等价缩放。例如用对角矩阵 D 把 XW 改写成 (XD⁻¹)(DW)，浮点计算结果相同，量化后的误差分布会改变。\n\nSmoothQuant 主要为 INT8 W8A8 服务，压低激活离群值，把部分难度转移到权重。AWQ 原始设定主要是 W4A16 之类的 weight-only，利用激活显著性保护对输出更敏感的权重通道。对比它们能看清缩放目标的区别。做速度和精度对照时，应注明 W/A 位宽、scale 粒度、kernel 及 workload。',
+          sources: [smoothQuant, awq],
+        },
+        {
+          question: 'MoE 量化的难点是什么？为什么 Router 往往保留 BF16？',
+          answer: '一个难点是专家输入不均衡。不同专家可能收到完全不同规模和分布的校准 token，少被路由到的专家更容易校准不足。应按实际路由统计每个专家的样本覆盖和误差，检查长尾任务与专家负载。\n\n另一个难点是 Router。它的 top-k 是离散选择，边界两侧的分数接近时，一点量化误差就可能换掉整个专家，影响输出和负载分布。Router 在总开销里通常很小，保留 BF16 权重和输入、必要时用 FP32 计算路由分数或 softmax，成本通常可控。相比逐层误差，还要检查路由 top-k 一致率和端到端质量。',
+          sources: [
+            { label: 'Switch Transformer 选择性精度', url: 'https://www.jmlr.org/papers/volume23/21-0998/21-0998.pdf' },
+            { label: 'LLM Compressor 量化方案', url: 'https://docs.vllm.ai/projects/llm-compressor/en/latest/guides/compression_schemes/' },
+          ],
+        },
+      ],
+    },
+  ],
+});

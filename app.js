@@ -44,6 +44,7 @@ function makeReferences(sources) {
 
 function makeQuestionContent({ table: exampleTable, tree, text }) {
   const content = element('div', 'question-detail-content');
+  if (tree) content.append(element('pre', 'tree-example', tree));
   if (exampleTable) {
     const table = element('table', 'example-table');
     table.append(element('caption', '', exampleTable.caption));
@@ -63,14 +64,32 @@ function makeQuestionContent({ table: exampleTable, tree, text }) {
     }
     content.append(table);
   }
-  if (tree) content.append(element('pre', 'tree-example', tree));
   for (const paragraph of text.split('\n\n')) {
     content.append(element('p', '', paragraph));
   }
   return content;
 }
 
-function makeRound(round) {
+function makeQuestionList(questions, heading, firstNumber) {
+  const list = element('ol', 'questions');
+  if (firstNumber !== 1) list.start = firstNumber;
+  for (const { question, answer, example, note, sources } of questions) {
+    const item = element('li');
+    item.append(element(heading, '', question));
+    for (const paragraph of answer.split('\n\n')) item.append(element('p', '', paragraph));
+    if (example) item.append(makeQuestionContent(example));
+    if (note) {
+      const details = element('details', 'question-details');
+      details.append(element('summary', '', '项目补充'), makeQuestionContent(note));
+      item.append(details);
+    }
+    if (sources?.length) item.append(makeReferences(sources));
+    list.append(item);
+  }
+  return list;
+}
+
+function makeRound(round, sections, questionCount) {
   const card = element('details', 'round');
   card.id = round.id;
   const summary = element('summary');
@@ -101,25 +120,16 @@ function makeRound(round) {
   const side = element('span', 'round-side');
   const chevron = element('span', 'chevron');
   chevron.setAttribute('aria-hidden', 'true');
-  side.append(element('span', 'question-count', round.questions.length + ' 题'), chevron);
+  side.append(element('span', 'question-count', questionCount + ' 题'), chevron);
   summary.append(tile, copy, side);
 
   const body = element('div', 'round-body');
-  const list = element('ol', 'questions');
-  for (const { question, answer, example, note, sources } of round.questions) {
-    const item = element('li');
-    item.append(element('h4', '', question));
-    for (const paragraph of answer.split('\n\n')) item.append(element('p', '', paragraph));
-    if (example) item.append(makeQuestionContent(example));
-    if (note) {
-      const details = element('details', 'question-details');
-      details.append(element('summary', '', '项目补充'), makeQuestionContent(note));
-      item.append(details);
-    }
-    if (sources?.length) item.append(makeReferences(sources));
-    list.append(item);
+  let firstNumber = 1;
+  for (const { title, questions } of sections) {
+    if (title) body.append(element('h4', 'question-section-title', title));
+    body.append(makeQuestionList(questions, title ? 'h5' : 'h4', firstNumber));
+    firstNumber += questions.length;
   }
-  body.append(list);
   if (round.sources?.length) body.append(makeReferences(round.sources));
   card.append(summary, body);
   return card;
@@ -127,7 +137,10 @@ function makeRound(round) {
 
 for (const round of interviewRounds) {
   if (!companies.has(round.company)) companies.set(round.company, { records: [] });
-  questionTotal += round.questions.length;
+  const sections = round.sections ?? [{ questions: round.questions }];
+  const questions = sections.flatMap((section) => section.questions);
+  const questionCount = questions.length;
+  questionTotal += questionCount;
 
   const searchableText = normalize([
     round.company,
@@ -135,9 +148,11 @@ for (const round of interviewRounds) {
     round.round,
     round.date,
     ...(round.keywords ?? round.tags ?? []),
-    ...round.questions.flatMap(({ question, answer, example, note }) => [question, answer, example?.text, note?.text]),
+    ...sections.map(({ title }) => title),
+    ...questions.flatMap(({ question, answer, example, note }) => [question, answer, example?.text, note?.text]),
   ].join(' '));
-  companies.get(round.company).records.push({ round, card: makeRound(round), searchableText });
+  const card = makeRound(round, sections, questionCount);
+  companies.get(round.company).records.push({ card, searchableText, questionCount });
 }
 
 const stats = document.getElementById('stats');
@@ -164,12 +179,12 @@ function updateLibrary() {
   for (const [name, { records, section, heading }] of companies) {
     const companyMatches = !selectedCompany || name === selectedCompany;
     let visibleRounds = 0;
-    for (const { round, card, searchableText } of records) {
+    for (const { card, searchableText, questionCount } of records) {
       const matches = companyMatches && terms.every((term) => searchableText.includes(term));
       card.hidden = !matches;
       if (matches) {
         visibleRounds += 1;
-        questions += round.questions.length;
+        questions += questionCount;
       }
     }
     heading.hidden = Boolean(selectedCompany);
