@@ -168,7 +168,7 @@ interviewRounds.push({
                 ['C', '1', '1', '0', '1'],
               ],
             },
-            text: '节点下标依次是 r=0、A=1、B=2、C=3，对应 parent=[-1, 0, 0, 1]。C 的父节点是 A，所以第 3 行复制第 1 行，再打开 C 自己的列，得到 [1, 1, 0, 1]。若前缀长度是 L，四个节点的 position ID 分别是 [L, L+1, L+1, L+2]。\n\nlogits[0] 是读完 r 后的预测，用来验证 A 或 B。logits[1] 是读完 r→A 后的预测，用来验证 C。B 和 C 都是叶子，它们各自的 logits 可以给出下一 token。\n\n例如 logits[0] 的 argmax 是 A，logits[1] 的 argmax 是 C，logits[3] 的 argmax 是 X。走到 C 后找不到下一子节点，所以 accept_length=2，数的是 A、C。r 是上一轮已选的 anchor，X 是本轮 Target 续写的 token。此时保留 r、A、C 已计算的 KV。',
+            text: '节点下标依次是 r=0、A=1、B=2、C=3，对应 parent=[-1, 0, 0, 1]。C 的父节点是 A，所以第 3 行复制第 1 行，再打开 C 自己的列，得到 [1, 1, 0, 1]。若前缀长度是 L，四个节点的 position ID 分别是 [L, L+1, L+1, L+2]。\n\nlogits[0] 是读完 r 后的预测，用来验证 A 或 B。logits[1] 是读完 r→A 后的预测，用来验证 C。logits[2] 对应 r→B，logits[3] 对应 r→A→C，这两行给各自路径末尾的下一 token 打分。\n\n例如 logits[0] 的 argmax 是 A，logits[1] 的 argmax 是 C，logits[3] 的 argmax 是 X。走到 C 后找不到下一子节点，所以 accept_length=2，数的是 A、C。r 是本轮开始前已选的 anchor，X 是本轮 Target 续写的 token。此时保留 r、A、C 已计算的 KV。',
             code: {
               caption: '从父索引到接受长度的 Greedy 伪代码',
               text: `tokens = [r, A, B, C]
@@ -186,7 +186,7 @@ for i, p in enumerate(parent):
         children[p].append(i)
     mask[i][i] = True
 
-# logits[i] 是经过节点 i 之后的 next-token 分布
+# logits[i] 给节点 i 之后的候选 token 打分
 logits = target_forward(
     tokens, prefix_kv, mask, positions
 )
