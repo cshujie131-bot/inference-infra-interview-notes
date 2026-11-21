@@ -304,3 +304,78 @@ keep_kv_rows = [0] + accepted_rows
     },
   ],
 });
+
+interviewRounds.push({
+  id: 'tencent-hunyuan-inference-infra',
+  company: '腾讯混元',
+  title: '推理 Infra 面试',
+  keywords: ['分布式推理', '集合通信', '长上下文'],
+  questions: [
+    {
+      question: 'Tensor Parallel 怎么切 Linear、Attention 和 FFN？通信发生在哪里？',
+      answer: '先约定 PyTorch Linear 的权重 W=[out, in]，输出 Y=XWᵀ。名称按数学里的 X·A 来叫，其中 A=Wᵀ。Column Parallel 切输出维，即 W 切成 [out/p, in]，每张卡读同一份 X，各自产生一段输出。只有下游需要完整输出时才做 All-Gather。Row Parallel 切输入维，即 W 切成 [out, in/p]，每张卡用对应输入分片得到完整形状的部分和，然后按元素求和，常用 All-Reduce。\n\nAttention 的 Q/K/V 投影做 Column Parallel，按完整 head 分配。每张卡用自己的 Q head 和对应 K/V head 在本地做 Attention，输出投影 O 再做 Row Parallel，把各卡贡献归约成完整 hidden state。GQA 按 Q head 与 KV head 的分组关系切分。TP 大于 KV head 数时，常见实现会让部分 rank 复制同一个 KV head，具体取决于框架布局。\n\nFFN 的 up 投影做 Column Parallel，SwiGLU 的 gate 和 up 切在同一组中间通道，激活与逐元素乘法都在本地完成。down 投影接 Row Parallel，直接吃该分片，到末尾再归约。这样两层中间无需先 Gather 再切回去。经典复制 residual 的 TP 路径里，一个 Transformer block 通常在 Attention O 和 FFN down 各做一次归约。\n\nTP 加大能降低单卡权重占用和部分 GEMM 时间，但 collective 的固定时延、互联带宽、小分片的 kernel 效率和 KV head 复制都会影响收益。选 TP 时先满足显存，再按真实并发测 prefill 和 decode。',
+      example: {
+        text: 'TP=4 的例子。32 个 Q head、8 个 KV head，按组均匀切后每卡负责 8 个 Q head、2 个 K head 和 2 个 V head。FFN 若从 H=4096 扩到 F=11008，每卡先得到 [N, 2752] 的中间激活，down 投影各自产生 [N, 4096] 部分和。把四份部分和逐元素相加，就是完整输出。',
+      },
+      sources: [
+        { label: 'Megatron-LM 论文', url: 'https://arxiv.org/abs/1909.08053' },
+        { label: 'Megatron Core 线性层实现', url: 'https://docs.nvidia.com/megatron-core/developer-guide/latest/apidocs/core/core.tensor_parallel.layers.html' },
+        { label: 'vLLM Llama QKV 分片示例', url: 'https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/llama.py' },
+      ],
+    },
+    {
+      question: 'TP 中为什么用 All-Reduce、Reduce-Scatter 和 All-Gather？通信量怎么算？',
+      answer: 'All-Reduce 把各卡的部分和加起来，每卡都得到完整结果。Reduce-Scatter 也先求和，每卡只保留结果的一段。All-Gather 把各卡已有的分片拼回完整 Tensor，拼接本身无需相加。比如 TP 和 Sequence Parallel 组合时，可用 Reduce-Scatter 归约并按 token 保留分片，在下一处需要完整 token 轴的线性层前再 All-Gather。\n\n设 p 是 TP rank 数，S 是完整逻辑 Tensor 的字节数。按 Ring 算法，每 rank 的单向发送量为 All-Reduce 2(p−1)S/p，Reduce-Scatter 或 All-Gather 各 (p−1)S/p。接收量与发送量相同。All-Gather 如果给的是本地分片字节数 s，先换算 S=p×s。这个口径忽略协议开销，其他 collective 算法和拓扑会改变实际耗时。\n\n对 [B, Q, H] 激活，S=B×Q×H×每元素字节数。Q 是这次参与计算的 query token 数，普通单步 decode 常取 Q=1。连续批处理用实际调度的 token 总数乘 H 和元素大小。做 TP=2 / TP=4 对照时固定 workload，看 Nsight 上关键路径暴露了多少 NCCL 和等待时间。如果 GEMM 已缩短而 TPOT 或吞吐不再改善，且增加的时间落在 collective 或等其他 rank 上，就能确认通信开始主导。',
+      example: {
+        table: {
+          caption: 'BF16 [4, 128, 4096]，完整 Tensor 为 4,194,304 Byte（4 MiB）',
+          columns: ['Ring 发送量', 'TP=2', 'TP=4'],
+          rows: [
+            ['All-Reduce / rank', '4 MiB', '6 MiB'],
+            ['Reduce-Scatter / rank', '2 MiB', '3 MiB'],
+            ['All-Gather / rank', '2 MiB', '3 MiB'],
+            ['All-Reduce 全 ranks', '8 MiB', '24 MiB'],
+          ],
+        },
+        text: '例如 TP=4 的 All-Reduce 每卡发送 2×3/4×4 MiB=6 MiB，也就是 6,291,456 Byte。若统计每卡发送加接收，则是 12 MiB。小消息还可能主要耗在每轮启动与同步，因此同时看时延和带宽。',
+      },
+      sources: [
+        { label: 'NCCL 集合通信定义', url: 'https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html' },
+        { label: 'NCCL Tests 流量计算', url: 'https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md' },
+        { label: 'Nsight Systems 分析文档', url: 'https://docs.nvidia.com/nsight-systems/AnalysisGuide/' },
+      ],
+    },
+    {
+      question: 'Serving DP 和 TP 有什么区别？什么时候该增加 DP？',
+      answer: 'TP 让同一请求的每层计算分布到多卡，卡间交换激活。一套 DP 副本则有完整的逻辑模型，可由一张卡承载，也可由一个 TP/PP 组承载。Serving DP 把不同请求路由到不同副本，每个副本独立调度 batch、维护自己的 KV Cache。副本同时工作，所以总吞吐上升。\n\n单请求在同样的副本里执行，增加 DP 通常不会缩短它的前向时间。高负载时，多副本有机会减少排队，从而改善 TTFT 和端到端延迟。若单卡放不下模型，单纯多复制几份依然放不下，需要用 TP、PP 或量化降低每个设备的占用。\n\n如果一套副本已经放得下模型，且单请求延迟达到目标，容量不足时优先增加 DP。如果主要问题是单副本显存或单请求计算时间，再比较增大 TP 的收益与通信代价。训练里的标准 DDP 用不同数据做前向和反向，需要同步梯度。Serving DP 做的是请求并行。MoE 若同时开 EP，专家可能跨 DP ranks 分片并交换 token，性能还要看这部分通信。',
+      sources: [
+        { label: 'vLLM Serving DP', url: 'https://docs.vllm.ai/en/latest/serving/data_parallel_deployment/' },
+        { label: 'vLLM Expert Parallel', url: 'https://docs.vllm.ai/en/latest/serving/expert_parallel_deployment/' },
+        { label: 'Megatron 并行策略', url: 'https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html' },
+      ],
+    },
+    {
+      question: 'Pipeline Parallel 怎么切模型？为什么推理实现复杂？',
+      answer: 'PP 按模型深度切 stage。每个 stage 放连续的若干层和这些层的 KV Cache，stage 之间通过 P2P 传激活。划分时按目标 workload 实测每段的时间和显存，embedding、LM head、MoE 层和 KV 大小都可能让平均分层失衡。稳态流水节拍主要由最慢的 stage 决定。\n\nMicro-batch 是一次进入流水线的一小批请求或 token。第一个 micro-batch 刚进入时，后面的 stage 要等。最后一个进入后，前面的 stage 会先空下来。这些填充和排空时间就是 bubble。理想情况下 p 个等时 stage 处理 m 个 micro-batch，需要 m+p−1 个时间槽，bubble 比例为 (p−1)/(m+p−1)。可以用更多独立 micro-batch 填满流水线、按实测成本重切 stage，并尝试把 P2P 搬运与计算重叠。\n\n一个请求的 token 仍要依次通过各 stage，跨 stage 传输和等待会进入延迟。自回归 decode 还要等尾 stage 给出 token，才能发起对应请求的下一步，流水线通常靠其他请求把空位填起来。\n\n实现里要同时处理分层加载、可变长度 micro-batch 的调度、异步收发顺序、跨 stage 对齐请求 ID 和 KV slot、尾 stage 采样回传，以及完成或取消后的状态回收。面试追问是否做过 PP 时，具体讲自己负责过哪一段和怎样验证。',
+      example: {
+        text: '4 个等时 stage 只跑 1 个 micro-batch 时，理想 bubble 是 3/4。跑 8 个时降到 3/11，约 27%。实测还要算 stage 不平衡、传输，以及 micro-batch 变小后 GEMM 效率的变化。',
+      },
+      sources: [
+        { label: 'GPipe 流水线论文', url: 'https://arxiv.org/abs/1811.06965' },
+        { label: 'Megatron Pipeline 调度与 P2P', url: 'https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/core/pipeline_parallel.html' },
+      ],
+    },
+    {
+      question: 'Context Parallel 为什么适合长 Context？切开 Sequence 后怎么做 Attention？',
+      answer: 'CP 按序列位置把同一条请求分到多卡。Prefill 均匀分 p 份后，每卡只负责约 1/p 的 query 位置，并保存对应的持久 KV 分片，减轻单卡显存和计算压力。完整 Attention 仍要让每段 Q 看见因果范围内的所有 K/V，所以每卡算本地 Q 时要从其他卡取对应的 K/V，或汇总远端算出的部分结果。\n\nPrefill 可以先 All-Gather K/V 再算，也可以用 Ring Attention。Ring 中每卡保留本地 Q，K/V block 沿环传递。收到一块就做一次局部 Attention，用全局位置施加因果 mask，并通过 online softmax 合并结果。这样无需在每卡同时物化完整 K/V，全局 dense attention 的计算量仍是 O(L²)。\n\nDecode 的常见做法是把历史 KV 按位置分片，各卡拿到对应的当前 Q 后，读自己的 KV 分片，产生局部 Attention 统计量。一种合并方式是先跨卡求 MAX，再按该最大值缩放并用 SUM 合并分子和分母。此时主要省的是每卡 KV 容量和读取量，要和新增通信一起衡量。',
+      example: {
+        text: '以某一个 query row 为例。每块先算最大分数 mᵢ、指数和 lᵢ=Σexp(score−mᵢ)，以及未归一化的加权值 uᵢ=Σexp(score−mᵢ)·V。令 m=max(mᵢ)，再用 exp(mᵢ−m) 把每块的 lᵢ 和 uᵢ 换到同一个基准。最终输出是 Σ[exp(mᵢ−m)·uᵢ] ÷ Σ[exp(mᵢ−m)·lᵢ]。整块都被 mask 的块可跳过。这样跨卡合并时保留了全局 softmax 的归一化系数。',
+      },
+      sources: [
+        { label: 'Megatron Context Parallel', url: 'https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/context_parallel.html' },
+        { label: 'Ring Attention 论文', url: 'https://arxiv.org/abs/2310.01889' },
+        { label: 'vLLM Context Parallel 部署', url: 'https://docs.vllm.ai/en/latest/serving/context_parallel_deployment/' },
+      ],
+    },
+  ],
+});
