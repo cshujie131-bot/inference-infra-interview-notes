@@ -382,3 +382,72 @@ interviewRounds.push({
     },
   ],
 });
+
+interviewRounds.push({
+  id: 'tencent-hunyuan-kernels-kv-routing',
+  company: '腾讯混元',
+  title: '算子与 KV Cache 路由',
+  keywords: ['Blackwell', 'Dynamo', 'W4A4'],
+  questions: [
+    {
+      question: 'Ampere、Hopper、Blackwell 的 Tensor Core 指令和异步调度怎么演进？',
+      answer: 'Ampere（以 A100 为例）的计算主体是 warp 级 mma.sync，源片段和累加器在寄存器中。搬运侧用 cp.async 把数据从 Global Memory 异步拷到 Shared Memory，再通过 commit/wait group 做多级缓冲。常见 Tensor Core 路径增加了 BF16、TF32 和 2:4 结构化稀疏支持。\n\nHopper（H100）把搬运和计算都做成更大粒度的异步操作。TMA 用 tensor map 描述多维 Tile，由一个线程发起批量搬运，用 mbarrier 通知消费者。WGMMA（wgmma.mma_async）由 4 个 Warp 协同发射，常见路径用 shared-memory descriptor 读操作数，部分指令也支持 A 从寄存器读取，累加器仍分布在寄存器。Producer 搬数据，Consumer 算 MMA，用 barrier 和 WGMMA 的 commit/wait 控制阶段推进。Hopper 还加入 FP8 E4M3/E5M2 的计算路径。\n\nBlackwell 数据中心 SM100 延续 TMA，改用 tcgen05.mma（常称 UMMA）异步执行矩阵乘加。一个线程可以触发整块运算，累加器放进 Tensor Memory（TMEM），完成后再由 epilogue 读出。Block-scaled 路径支持 FP4/FP6 等低精度格式，Tensor Core 在乘加时按 K 方向的微块消费 scale。实际指令、形状和数据类型要按目标 SM 选。',
+      sources: [
+        { label: 'NVIDIA Ampere Tuning Guide', url: 'https://docs.nvidia.com/cuda/ampere-tuning-guide/index.html' },
+        { label: 'NVIDIA Hopper Tuning Guide', url: 'https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html' },
+        { label: 'PTX ISA', url: 'https://docs.nvidia.com/cuda/parallel-thread-execution/' },
+        { label: 'CUTLASS tcgen05 指南', url: 'https://docs.nvidia.com/cutlass/4.5.2/media/docs/pythonDSL/mma_docs/tcgen05_programming.html' },
+      ],
+    },
+    {
+      question: 'Hopper 的 WGMMA 要 Warp Group 发射，Blackwell 的 UMMA 为什么能由单个线程发射？TMEM 上怎么用 Scale Factor？',
+      answer: 'WGMMA 的发射和寄存器片段都按 Warp Group 定义，4 个连续 Warp 的 128 个线程要参与同一次指令。SM100 的 tcgen05.mma 把操作数位置和 Tile 布局交给描述符，累加结果写到 TMEM，由硬件执行整块运算。常见写法是安排一个 MMA Warp，再用 elect.sync 选一个 lane 发射，精确口径是单线程发射。TMEM 分配和结果读取仍有自己的 Warp 协作要求，整个 kernel 也依然要有人搬运、同步和做 epilogue。\n\n每轮 K-Tile 通常先把 A、B、SFA、SFB 搬到 Shared Memory，再按指令布局用 tcgen05.cp 把 A/B 的 block scale 写到 TMEM。发 tcgen05.mma.block_scale 时传入 A/B 的描述符、SFA/SFB 的 TMEM 地址以及 D 累加器的 TMEM 地址。Tensor Core 按相应 K 子块先应用两边的 scale，再乘加。MMA 完成后通过 commit/barrier 同步，epilogue 再读 TMEM。\n\n以常见格式为例，MXFP4 用 E2M1，MXFP6 可用 E2M3 或 E3M2，两者都是每 32 个元素用一个 E8M0 block scale。NVFP4 的典型配方是 FP4 E2M1，每 16 个元素用一个 E4M3 block scale，并有 tensor 级 FP32 scale。若该全局 scale 在配方里单独存放，可以合进 GEMM 的 alpha 或 epilogue。',
+      example: {
+        text: '逻辑 K=64 的例子。按 16 元素一块的 scale，会有 4 个分别缩放的 K 段。每段乘积的权重是它自己的 sA×sB，输出是这些带权部分和的累加。只有整个归约维共用同一个比例时，才可以把这个比例统一提到累加结束后。',
+      },
+      sources: [
+        { label: 'PTX 指令发射和 TMEM 语义', url: 'https://docs.nvidia.com/cuda/parallel-thread-execution/' },
+        { label: 'CUTLASS block-scaled MMA 指南', url: 'https://docs.nvidia.com/cutlass/4.5.2/media/docs/pythonDSL/mma_docs/tcgen05_programming.html' },
+        { label: 'CUTLASS SM100 NVFP4 GEMM', url: 'https://github.com/NVIDIA/cutlass/blob/main/examples/72_blackwell_narrow_precision_gemm/72b_blackwell_nvfp4_nvfp4_gemm.cu' },
+        { label: 'OCP MX 格式规范', url: 'https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf' },
+        { label: 'NVIDIA NVFP4 格式', url: 'https://docs.nvidia.com/deeplearning/transformer-engine-releases/release-2.19/features/low_precision_training/nvfp4/nvfp4.html' },
+      ],
+    },
+    {
+      question: 'Cache-aware 路由怎么避免热点实例？λ 怎么定，跨实例共享 KV 又怎么做？',
+      answer: '只按最长可复用前缀选 worker，热门前缀会把请求集中到已有副本，排队时间可能超过省下的 prefill 时间。可以用 scoreᵢ=λ·Cᵢ+(1−λ)·Lᵢ，λ 在 0 到 1 之间，C 是归一化的缓存收益，L 是归一化的负载余量，分数越高越优先。缓存收益可按可复用 token 折算成预计省下的时间，负载可结合排队 prefill tokens、活跃 decode blocks 和可用 KV 容量。临近饱和的实例先做限流或过滤。\n\nλ 用同一批 trace 回放选定。扫并发、热前缀比例和输入输出长度，看 P95 TTFT、P95 ITL、SLO 以内的 goodput，以及按 token 统计的前缀命中率。适度降低缓存权重会牺牲部分本地命中，但可能显著减少尾延迟。线上可随负载调权重，并加平滑或滞回来避免抖动。\n\n跨实例共享要分为查索引和搬数据。索引记录可复用前缀及缓存位置。数据面可以拉取兼容的远端 KV 块，也可以给高频前缀扩副本。先校验模型版本、token 前缀、位置语义、KV 布局与租户隔离，再比较复制或加载时间和重算时间。NIXL 可承担数据搬运，实际复用需要推理引擎的 KV Connector 接入。\n\nDynamo 已经将前缀命中抵扣到 prefill 成本，再与潜在 decode blocks 和可选的活跃请求成本合并，还支持按负载衰减命中权重。公开的 kvcr 策略也会给可从 peer 拉取的块计分。可以对比的扩展是把命中、排队和链路开销都折成预计毫秒，并按热前缀控制副本数。用同一套 trace 对照 Dynamo 的基线，再报告 SLO 和成本差异。',
+      example: {
+        text: '例如走热门实例可再省 8 ms prefill，但会多排队 20 ms。对当前请求来说，预计 TTFT 更好的就是轻载实例。若同一个前缀反复出现，再比较把 KV 复制到轻载实例的一次性成本与后续请求能省下的重算时间。',
+      },
+      sources: [
+        { label: 'Dynamo Router 成本函数与 KV 事件', url: 'https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/router/router-design' },
+        { label: 'Dynamo 路由权重与 kvcr', url: 'https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/router/configuration-and-tuning' },
+        { label: 'Dynamo KVBM 与传输配置', url: 'https://docs.nvidia.com/dynamo/dev/reference/components/kvbm-configuration' },
+      ],
+    },
+    {
+      question: '英特尔 TILE Cache 仿真按哪些系统层级建模？怎么给客户估并行配置和 PD 配比？',
+      answer: '这题可以按设备、引擎、集群三层答。设备层先定义 TILE 对应的建模粒度。若模拟的是 Intel Xe GPU 的硬件 tile，就量出 tile 内缓存、HBM 和跨 tile 链路的容量、带宽与延迟，并用算子 microbenchmark 标定不同 shape 和精度的耗时。若项目按 KV tile 建模，则重点记录每块的大小、分配、命中、淘汰和传输。具体粒度按项目定义给出。\n\n引擎层做离散事件回放。输入请求到达时间、前缀、输入和输出长度，在仿真中触发入队、组 batch、Prefill、KV 搬运和逐轮 Decode。把算子 profile、集合通信和缓存占用接进每个事件的成本模型。集群层再组合 TP/PP/DP、P/D 实例数、网卡拓扑和路由，统计 P95 TTFT、P95 TPOT、goodput 与资源占用。\n\n给客户配比时，先用到达率和单实例实测容量估 P/D 数量，再把附近几组配置放进模拟器对照。验收条件是满足 SLO 和目标 goodput 后，尽量降低卡数与成本。最后选少量候选做实机校准，交付配置表、适用的流量范围和仿真误差。',
+      example: {
+        text: '举例用一组假设值。请求到达率 20 req/s，每条平均生成 100 token，Prefill 实例处理 8 req/s，Decode 实例生成 500 tok/s。容量起点可以取 P≥⌈20/8⌉=3、D≥⌈2000/500⌉=4。然后用流量突发、命中率和 P→D 的 KV 链路带宽验证这组配置是否留足了尾延迟余量。',
+      },
+      sources: [
+        { label: 'Intel GPU 多 Stack / Tile 架构', url: 'https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2024-1/multi-tile-arch.html' },
+        { label: 'Vidur 推理系统仿真论文', url: 'https://arxiv.org/abs/2405.05465' },
+        { label: 'DistServe P/D 配置与 Goodput', url: 'https://arxiv.org/abs/2401.09670' },
+      ],
+    },
+    {
+      question: 'W4A4 稀疏 Kernel 怎么实现？4 Tile 共用 Bitmap、Split-K、双缓冲和 M16N8K64 各起什么作用？',
+      answer: '先明确数据格式。以 INT4×INT4 为例，权重可做对称 per-channel 或 per-group 量化，激活可做 per-token 量化，Tensor Core 做整数乘加并累加到 INT32。K 方向若用不同 group scale，各组要保留部分和，按各自 sW×sA 缩放后再合并。若一整行/列在 K 上共用 scale，可以在 epilogue 统一处理。\n\nM16N8K64 是单次 MMA 的计算形状：16×64 和 64×8 的片段产出 16×8 的部分和，K=64 个 INT4 元素对应 32 Byte 的原始一维数据。WMMA API 提供 warp 级 fragment 操作。这个形状的具体 PTX 路径可用 mma.sync.aligned.m16n8k64 的 s4/s32 变体。CTA 的输出 Tile 可由多个这种指令 Tile 组成，选型时要看小 batch 下的 padding 和并行度。硬件 mma.sp 需要指令规定的结构稀疏和元数据编码。软件 Bitmap 可以先展开成密集片段，再走普通 MMA。\n\n4 Tile 共用 1 Bitmap 可以用一个示例布局解释：一份 Bitmap 里分出四个 Tile 各自的 bit 区间，同时给出每个 Tile 的非零值起点或可推导的前缀计数。某位置的 bit 为 1 时，用该 Tile 的非零起点加上前面 bit 的 popcount，定位 packed INT4 值，再把它填回目标 fragment。这样能合并元数据读取并摊薄头部开销。若仍是一位置一位，四个 Tile 合放不会减少原始 mask 的位数，收益要实测。\n\n算子流水线可以把下一块的 Bitmap、压缩权重和激活异步预取到另一组缓冲，在当前块上解码、重建稠密片段并发 MMA，等消费者释放缓冲后才继续写入。这样就把题面里的 LSBD 落到「稀疏加载 → 重建 → 密集乘加」的三个阶段。GEMM 的 Split-K 沿归约轴把 K 段分给不同 CTA，小 batch 下能增加可并行工作，但要付出部分和的额外归约。Split-K 也要配合量化组边界。\n\n典型适用场景是小 batch Decode、权重带宽成为瓶颈且稀疏率足够高。用同精度 Dense W4A4 做基线，比较实际 HBM 字节、解码与同步成本、端到端延迟和精度。四 Tile 的具体编码规则或加速比用真实项目数据说明。',
+      example: {
+        text: '若每个 INT4 权重位置用 1 bit mask，密度为 d，光非零值和 mask 就约占 0.5d+0.125 Byte/位置。要比密集 INT4 的 0.5 Byte 小，理想情况下稀疏率得超过 25%。实际还要算 offset、对齐和解码，越过这个存储阈值后还要测性能。',
+      },
+      sources: [
+        { label: 'PTX 的 INT4 MMA 与稀疏元数据', url: 'https://docs.nvidia.com/cuda/parallel-thread-execution/' },
+        { label: 'Flash-LLM 稀疏加载与密集计算', url: 'https://arxiv.org/abs/2309.10285' },
+        { label: 'SpInfer Bitmap 编码论文', url: 'https://www.cse.ust.hk/~weiwa/papers/eurosys25-fall-spinfer.pdf' },
+      ],
+    },
+  ],
+});
