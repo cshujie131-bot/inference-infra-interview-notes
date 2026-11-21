@@ -325,23 +325,24 @@ interviewRounds.push({
     },
     {
       question: 'TP 中为什么用 All-Reduce、Reduce-Scatter 和 All-Gather？通信量怎么算？',
-      answer: 'All-Reduce 把各卡的部分和加起来，每卡都得到完整结果。Reduce-Scatter 也先求和，每卡只保留结果的一段。All-Gather 把各卡已有的分片拼回完整 Tensor，拼接本身无需相加。比如 TP 和 Sequence Parallel 组合时，可用 Reduce-Scatter 归约并按 token 保留分片，在下一处需要完整 token 轴的线性层前再 All-Gather。\n\n设 p 是 TP rank 数，S 是完整逻辑 Tensor 的字节数。按 Ring 算法，每 rank 的单向发送量为 All-Reduce 2(p−1)S/p，Reduce-Scatter 或 All-Gather 各 (p−1)S/p。接收量与发送量相同。All-Gather 如果给的是本地分片字节数 s，先换算 S=p×s。这个口径忽略协议开销，其他 collective 算法和拓扑会改变实际耗时。\n\n对 [B, Q, H] 激活，S=B×Q×H×每元素字节数。Q 是这次参与计算的 query token 数，普通单步 decode 常取 Q=1。连续批处理用实际调度的 token 总数乘 H 和元素大小。做 TP=2 / TP=4 对照时固定 workload，看 Nsight 上关键路径暴露了多少 NCCL 和等待时间。如果 GEMM 已缩短而 TPOT 或吞吐不再改善，且增加的时间落在 collective 或等其他 rank 上，就能确认通信开始主导。',
+      answer: 'All-Reduce 把各卡的部分和加起来，每卡都得到完整结果。Reduce-Scatter 求和后每卡只保留结果的一段。All-Gather 把各卡已有的分片拼回完整 Tensor。TP 和 Sequence Parallel 组合时，可用 Reduce-Scatter 归约并按 token 保留分片，下一处需要完整 token 轴时再 All-Gather。\n\nRing All-Reduce。设 p 是 rank 数、S 是完整 Tensor 的字节数。Ring 分 Reduce-Scatter 和 All-Gather 两阶段，各走 p−1 步，每步每卡发 S/p，所以每卡共发 2(p−1)S/p，也收这么多。各卡流量均匀，大消息通常容易跑满带宽，例如大 prefill batch 的激活归约。小消息时，随 p 线性增长的通信步数更容易暴露启动时延。\n\nTree All-Reduce。以单棵树的整块归约和广播为例，每条父子边分别向上、向下传 S，按逻辑发送量计，p−1 条边的全组发送量也是 2(p−1)S。单卡发送量取决于它在树上的度数，叶子较轻，分支节点更忙。平衡二叉树沿关键路径的通信层数是 O(log p)，常适合小消息、rank 多、对时延敏感的 decode。NCCL 用两棵互补树各传一半数据，分摊分支节点上的流量。实际选择还取决于消息大小和互联拓扑。\n\n对 [B, Q, H] 激活，S=B×Q×H×每元素字节数。Q 是本次处理的 query token 数，普通单步 decode 常取 Q=1。连续批处理用实际调度的 token 总数乘 H 和元素大小。做 TP=2 / TP=4 对照时，固定 workload，看 Nsight 上关键路径的 NCCL 和等待时间。GEMM 已缩短而端到端表现停滞，并且主要时间花在等 collective 时，就进入了 Communication Bound。',
       example: {
         table: {
           caption: 'BF16 [4, 128, 4096]，完整 Tensor 为 4,194,304 Byte（4 MiB）',
-          columns: ['Ring 发送量', 'TP=2', 'TP=4'],
+          columns: ['发送量', 'TP=2', 'TP=4'],
           rows: [
-            ['All-Reduce / rank', '4 MiB', '6 MiB'],
-            ['Reduce-Scatter / rank', '2 MiB', '3 MiB'],
-            ['All-Gather / rank', '2 MiB', '3 MiB'],
-            ['All-Reduce 全 ranks', '8 MiB', '24 MiB'],
+            ['Ring All-Reduce / rank', '4 MiB', '6 MiB'],
+            ['Ring Reduce-Scatter / rank', '2 MiB', '3 MiB'],
+            ['Ring All-Gather / rank', '2 MiB', '3 MiB'],
+            ['Ring / Tree All-Reduce 全组', '8 MiB', '24 MiB'],
           ],
         },
-        text: '例如 TP=4 的 All-Reduce 每卡发送 2×3/4×4 MiB=6 MiB，也就是 6,291,456 Byte。若统计每卡发送加接收，则是 12 MiB。小消息还可能主要耗在每轮启动与同步，因此同时看时延和带宽。',
+        text: 'TP=4 的 Ring 每卡发 6 MiB，也就是 6,291,456 Byte。若统计单卡发送加接收，则是 12 MiB。单树若以 0 为根、0 连 1 和 2、1 连 3，则四卡分别发送 8、8、4、4 MiB，合计也是 24 MiB。表里的全组量只加总发送。\n\nRing 的 Reduce-Scatter 或 All-Gather 单阶段每卡各发 (p−1)S/p。若 All-Gather 的 shape 给的是单卡分片 s Byte，先换成完整大小 S=p×s。',
       },
       sources: [
         { label: 'NCCL 集合通信定义', url: 'https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html' },
         { label: 'NCCL Tests 流量计算', url: 'https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md' },
+        { label: 'NCCL 双二叉树', url: 'https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/' },
         { label: 'Nsight Systems 分析文档', url: 'https://docs.nvidia.com/nsight-systems/AnalysisGuide/' },
       ],
     },
@@ -367,14 +368,16 @@ interviewRounds.push({
     },
     {
       question: 'Context Parallel 为什么适合长 Context？切开 Sequence 后怎么做 Attention？',
-      answer: 'CP 按序列位置把同一条请求分到多卡。Prefill 均匀分 p 份后，每卡只负责约 1/p 的 query 位置，并保存对应的持久 KV 分片，减轻单卡显存和计算压力。完整 Attention 仍要让每段 Q 看见因果范围内的所有 K/V，所以每卡算本地 Q 时要从其他卡取对应的 K/V，或汇总远端算出的部分结果。\n\nPrefill 可以先 All-Gather K/V 再算，也可以用 Ring Attention。Ring 中每卡保留本地 Q，K/V block 沿环传递。收到一块就做一次局部 Attention，用全局位置施加因果 mask，并通过 online softmax 合并结果。这样无需在每卡同时物化完整 K/V，全局 dense attention 的计算量仍是 O(L²)。\n\nDecode 的常见做法是把历史 KV 按位置分片，各卡拿到对应的当前 Q 后，读自己的 KV 分片，产生局部 Attention 统计量。一种合并方式是先跨卡求 MAX，再按该最大值缩放并用 SUM 合并分子和分母。此时主要省的是每卡 KV 容量和读取量，要和新增通信一起衡量。',
+      answer: 'CP 按序列位置把同一条请求分到多卡。Prefill 均匀分 p 份后，每卡负责约 1/p 的 query 位置，并保存对应的持久 KV 分片。Prefill 可以先 All-Gather K/V 再算，也可以用 Ring Attention。Ring 中每卡保留本地 Q，K/V block 沿环传递。每收到一块就做局部 Attention，用全局位置施加因果 mask，再用 online softmax 合并。全局 dense attention 的计算量仍是 O(L²)。\n\nDecode Context Parallel 在 vLLM 的常见路径里先 All-Gather Q。TP 先产生本地 Q head 分片，DCP 组内沿 head 维把它们拼起来。历史 KV 继续按序列留在各卡，各卡用拼好的 Q 读自己的 KV 分片。Decode 每轮的 query token 少，移动 Q 的开销通常比搬整个历史 KV 小。MLA 若启用了组内 Q 投影复制，每卡已拿到组内 Q，可以省掉这次 Gather。\n\n每个 query/head 的局部 Attention 要同时保留局部输出 Oᵢ 和本地 softmax 的 LSEᵢ（log-sum-exp）。以 vLLM 的 ag_rs 路径为例，先 All-Gather LSE，求出全局 LSE，用 exp(LSEᵢ−全局 LSE) 缩放各卡自己的 Oᵢ，再 Reduce-Scatter 求和并把输出按 head 分回各卡。如果后面还要和另一段 KV 合并，就保留本次的全局输出和全局 LSE。',
       example: {
-        text: '以某一个 query row 为例。每块先算最大分数 mᵢ、指数和 lᵢ=Σexp(score−mᵢ)，以及未归一化的加权值 uᵢ=Σexp(score−mᵢ)·V。令 m=max(mᵢ)，再用 exp(mᵢ−m) 把每块的 lᵢ 和 uᵢ 换到同一个基准。最终输出是 Σ[exp(mᵢ−m)·uᵢ] ÷ Σ[exp(mᵢ−m)·lᵢ]。整块都被 mask 的块可跳过。这样跨卡合并时保留了全局 softmax 的归一化系数。',
+        text: '以同一个 query/head 为例。若局部 kernel 留下的是未归一化的加权和 uᵢ=Σexp(score−mᵢ)·V，就同时保存最大分数 mᵢ 和指数和 lᵢ=Σexp(score−mᵢ)。这三项可以换成已归一化的局部输出 Oᵢ=uᵢ/lᵢ 和 LSEᵢ=mᵢ+log(lᵢ)。\n\n跨卡更新时，全局 LSE=logsumexp(LSEᵢ)，全局输出 O=Σ exp(LSEᵢ−全局 LSE)·Oᵢ。等价地，也能先取 m=max(mᵢ)，把局部分子 uᵢ 和分母 lᵢ 乘上 exp(mᵢ−m)，分别求和后再相除。空分片或全 mask 的分片取零权重。',
       },
       sources: [
         { label: 'Megatron Context Parallel', url: 'https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/context_parallel.html' },
         { label: 'Ring Attention 论文', url: 'https://arxiv.org/abs/2310.01889' },
         { label: 'vLLM Context Parallel 部署', url: 'https://docs.vllm.ai/en/latest/serving/context_parallel_deployment/' },
+        { label: 'vLLM DCP 的 Q Gather 流程', url: 'https://github.com/vllm-project/vllm-project.github.io/blob/main/_posts/2026-08-07-decode-context-parallelism.md' },
+        { label: 'vLLM DCP 的 LSE 合并代码', url: 'https://github.com/vllm-project/vllm/blob/main/vllm/v1/attention/ops/dcp.py#L441-L503' },
       ],
     },
   ],
