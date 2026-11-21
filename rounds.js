@@ -286,5 +286,21 @@ keep_kv_rows = [0] + accepted_rows
         },
       ],
     },
+    {
+      title: '投机解码补充',
+      questions: [
+        {
+          question: 'DSpark 相比 DFlash 增加 Markov Head 和 Confidence Head 后，具体带来了什么收益？串行开销会抵消 Acceptance Length 的提升吗？怎么判断？',
+          answer: 'Markov Head 提高每轮产出。它用上一个实际采到的 token 给当前 logits 加低秩转移偏置，让块内候选更连贯，后半段也更可能被接受。Confidence Head 节省验证预算。它估计每个位置的条件接受率，调度器用连乘得到前缀存活概率，结合负载裁掉低收益尾部。高并发时，这能把 Target 批容量留给更有希望通过的 token。最终仍由 Target 按原规则验收。\n\n串行开销可能抵消收益。设 T 是平均整轮耗时，L 是每轮平均实际输出 token 数，含 Target 补采或额外产出的 token。比较 T/L。DSpark 要更快，每轮耗时的增幅就得小于每轮产出的增幅。例如 DFlash 一轮 4 ms、产出 5 个 token，DSpark 若产出 6 个，整轮就要低于 4.8 ms 才更快。\n\n工程上对照 DFlash 固定宽度、DSpark 固定宽度、同一 DSpark checkpoint 开自适应验证三组。在同一硬件上固定 Target、精度、采样和长度分布，前两组用相同验证宽度，再扫并发。用 trace 拆草稿骨干、串行 head、调度及 Target Verify 耗时，同时报实际验证数、每轮输出、P95 TPOT 和总输出 tokens/s。裁短候选后若仍按原来的 padding 形状执行，Verify 时间也要靠实测确认。',
+          example: {
+            text: '论文里的量级（图 4、5）。草稿长度 γ=7 时，DSpark 相对 DFlash 的接受长度在数学、代码、聊天上分别提高 16%、15%、18%。在 batch=128 的延迟实验里，随块宽度从 4 到 16 变化，整轮额外耗时为 0.2%–1.3%。\n\nConfidence Head 的静态阈值实验把聊天任务的接受率从 45.7% 提到 95.7%。这个变化伴随验证 token 数减少，判断速度还要看实际输出和整轮耗时。',
+          },
+          sources: [
+            dspark,
+            { label: 'vLLM 投机解码指标', url: 'https://docs.vllm.ai/en/latest/features/speculative_decoding/acceptance_metrics/' },
+          ],
+        },
+      ],
+    },
   ],
 });
